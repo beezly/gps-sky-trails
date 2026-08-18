@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GPS sky trails — Nettleton Hill</title>
+<title>GPS sky trails</title>
 <style>
   :root{
     --bg:#f7f6f2;
@@ -103,10 +103,46 @@
   }
   button:hover{background:rgba(128,128,128,0.1);}
   button:active{transform:scale(0.97);}
+  .top-row + .top-row{margin-top:-2px;margin-bottom:12px;}
+  .linkbtn{
+    width:auto;
+    height:auto;
+    border:none;
+    background:none;
+    padding:0;
+    font:inherit;
+    font-size:13px;
+    color:var(--accent);
+    cursor:pointer;
+  }
+  .linkbtn:hover{background:none;text-decoration:underline;}
+  .linkbtn:disabled{color:var(--text-muted);cursor:default;text-decoration:none;}
   #speedOut{
     font-size:13px;
     min-width:32px;
     color:var(--text-secondary);
+  }
+  .legend{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    margin-top:12px;
+    font-size:12px;
+    color:var(--text-secondary);
+  }
+  .legend span{display:flex;align-items:center;gap:5px;}
+  .swatch{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  #hoverInfo{
+    font-size:12px;
+    color:var(--text-secondary);
+    text-align:center;
+    min-height:18px;
+    margin-top:6px;
+  }
+  #dataLabel{
+    font-size:12px;
+    color:var(--text-muted);
+    margin-top:12px;
   }
   .note{
     font-size:12px;
@@ -120,21 +156,26 @@
 <body>
 <div class="wrap">
   <h1>GPS sky trails</h1>
-  <p class="sub">Timelapse simulation — lying on your back at Nettleton Hill, West Yorkshire</p>
+  <p class="sub" id="subtitle">Timelapse simulation — lying on your back at Nettleton Hill, West Yorkshire</p>
 
   <div class="top-row">
-    <span>53.65N, 1.83W</span>
+    <span id="locLabel">53.65&deg;N, 1.83&deg;W</span>
     <span id="clock">00:00</span>
+  </div>
+  <div class="top-row">
+    <button class="linkbtn" id="locBtn" type="button">Use my location</button>
+    <span id="dateLabel"></span>
   </div>
 
   <canvas id="dome" width="480" height="480"></canvas>
+  <div id="hoverInfo">Hover a satellite for details</div>
 
   <div class="controls">
     <button id="playBtn" aria-label="Play">
       <svg class="icon" id="playIcon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
     </button>
     <input type="range" id="timeSlider" min="0" max="719" step="1" value="0">
-    <button id="resetBtn" aria-label="Reset">
+    <button id="resetBtn" aria-label="Back to now" title="Back to now">
       <svg class="icon" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
     </button>
   </div>
@@ -144,7 +185,10 @@
     <span id="speedOut">x3</span>
   </div>
 
-  <p class="note">Simplified circular-orbit model: 24 satellites, 6 orbital planes at 55&deg; inclination, ~12-hour period. Each colour is one orbital plane. Illustrative, not real ephemeris data.</p>
+  <div class="legend" id="legend"></div>
+  <p id="dataLabel">Loading live orbital elements&hellip;</p>
+
+  <p class="note">Numbers beside each dot are SVNs (space vehicle numbers); colour is the orbital plane. Trails fade out over about 11.5 hours &mdash; just under one orbit &mdash; so each track is roughly a single pass. Starts at your current time and steps forward 24 hours in 2-minute increments. Positions come from live CelesTrak element sets for the operational GPS constellation; SVN, PRN, plane and block are from the NAVCEN constellation status. If the elements cannot be fetched, the page falls back to an illustrative 24-satellite model.</p>
 </div>
 
 <script>
@@ -156,57 +200,181 @@ canvas.width=480*DPR; canvas.height=480*DPR;
 ctx.scale(DPR,DPR);
 const W=480,H=480,cx=240,cy=240,Rmax=200;
 
-const lat=53.65*Math.PI/180, lon=-1.83*Math.PI/180;
-const Re=6378, alt=20200, r=Re+alt;
-const inc=55*Math.PI/180;
-const T=43082;
-const n=2*Math.PI/T;
-const omegaE=2*Math.PI/86164;
-const colors=['#7F77DD','#1D9E75','#D85A30','#D4537E','#378ADD','#BA7517'];
-const sats=[];
-for(let p=0;p<6;p++){
-  const RAAN=p*60*Math.PI/180;
-  for(let k=0;k<4;k++){
-    const M0=(k*90 + p*15)*Math.PI/180;
-    sats.push({RAAN,M0,color:colors[p]});
-  }
+const DEFAULT_SITE={lat:53.65,lon:-1.83,label:'Nettleton Hill, West Yorkshire'};
+let site={lat:DEFAULT_SITE.lat,lon:DEFAULT_SITE.lon,label:DEFAULT_SITE.label};
+
+// SVN / PRN / plane / block for each operational GPS satellite, keyed by NORAD
+// catalogue number. Sourced from the NAVCEN constellation status and joined to
+// CelesTrak by PRN — regenerate with tools/update-gps-metadata.py. NAVCEN sends
+// no CORS headers, so this cannot be fetched from the page at runtime.
+const GPS_META={
+/* SVN_TABLE_START */
+  68791:{svn:43,prn:13,plane:'A5',block:'IIR'},
+  26407:{svn:44,prn:22,plane:'B3',block:'IIR'},
+  32711:{svn:48,prn:7,plane:'A4',block:'IIR-M'},
+  35752:{svn:50,prn:5,plane:'E3',block:'IIR-M'},
+  29486:{svn:52,prn:31,plane:'A2',block:'IIR-M'},
+  28874:{svn:53,prn:17,plane:'C4',block:'IIR-M'},
+  32260:{svn:55,prn:15,plane:'F2',block:'IIR-M'},
+  27663:{svn:56,prn:16,plane:'B1',block:'IIR'},
+  32384:{svn:57,prn:29,plane:'C1',block:'IIR-M'},
+  29601:{svn:58,prn:12,plane:'B4',block:'IIR-M'},
+  28190:{svn:59,prn:19,plane:'C5',block:'IIR'},
+  28474:{svn:61,prn:2,plane:'D1',block:'IIR'},
+  36585:{svn:62,prn:25,plane:'B2',block:'IIF'},
+  39533:{svn:64,prn:30,plane:'A3',block:'IIF'},
+  38833:{svn:65,prn:24,plane:'A1',block:'IIF'},
+  39166:{svn:66,prn:27,plane:'C2',block:'IIF'},
+  39741:{svn:67,prn:6,plane:'D4',block:'IIF'},
+  40105:{svn:68,prn:9,plane:'F3',block:'IIF'},
+  40294:{svn:69,prn:3,plane:'E1',block:'IIF'},
+  41328:{svn:70,prn:32,plane:'F1',block:'IIF'},
+  40534:{svn:71,prn:26,plane:'B5',block:'IIF'},
+  40730:{svn:72,prn:8,plane:'C3',block:'IIF'},
+  41019:{svn:73,prn:10,plane:'E2',block:'IIF'},
+  43873:{svn:74,prn:4,plane:'F4',block:'III'},
+  44506:{svn:75,prn:18,plane:'D6',block:'III'},
+  45854:{svn:76,prn:23,plane:'E5',block:'III'},
+  46826:{svn:77,prn:14,plane:'B6',block:'III'},
+  48859:{svn:78,prn:11,plane:'D5',block:'III'},
+  55268:{svn:79,prn:28,plane:'A6',block:'III'},
+  62339:{svn:80,prn:1,plane:'D2',block:'III'},
+  64202:{svn:81,prn:21,plane:'E6',block:'III'},
+  67588:{svn:82,prn:20,plane:'F5',block:'III'}
+/* SVN_TABLE_END */
+};
+
+const TLE_URL='https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=json';
+const PLANES=['A','B','C','D','E','F'];
+const PLANE_COLORS={A:'#7F77DD',B:'#1D9E75',C:'#D85A30',D:'#D4537E',E:'#378ADD',F:'#BA7517'};
+const UNKNOWN_COLOR='#8a8880';
+
+// SGP4 units: distances in earth radii, times in minutes.
+const XKMPER=6378.135, KE=0.0743669161, J2=1.082616e-3;
+const Re=XKMPER;
+const N=720, STEP_S=120; // 2-min steps over 24h
+// How much of each satellite's past track stays on screen: ~11h 30m, a little
+// under one orbit (11h 58m), so a trail is roughly one pass and does not lap
+// itself. Drawn as a few constant-alpha bands so the tail fades out cheaply.
+const TRAIL_STEPS=Math.round(11.5*3600/STEP_S);
+const TRAIL_BANDS=6;
+const DEG=Math.PI/180;
+let startMs=Date.now();
+let sats=[];
+
+// Greenwich mean sidereal time (radians) for a wall-clock instant.
+function gmstRad(ms){
+  const d=ms/86400000+2440587.5-2451545.0; // days since J2000
+  const c=d/36525;
+  let g=280.46061837+360.98564736629*d+0.000387933*c*c-c*c*c/38710000;
+  g=((g%360)+360)%360;
+  return g*DEG;
 }
 
-const N=720; // 2-min steps over 24h
+// Recover the SGP4 mean elements and secular J2 rates from a TLE-style element
+// set. Drag and deep-space periodics are ignored: at GPS altitude they move a
+// satellite by a few tens of km over a day, which is under a tenth of a degree
+// in the sky — less than a pixel at this scale.
+function initSat(s){
+  const cosi=Math.cos(s.i), beta2=1-s.e*s.e;
+  const a1=Math.pow(KE/s.n0,2/3);
+  const k=0.75*J2*(3*cosi*cosi-1)/Math.pow(beta2,1.5);
+  const d1=k/(a1*a1);
+  const a0=a1*(1-d1/3-d1*d1-134/81*d1*d1*d1);
+  const d0=k/(a0*a0);
+  s.n=s.n0/(1+d0);   // rad/min
+  s.a=a0/(1-d0);     // earth radii
+  const p=s.a*beta2, f=J2/(p*p);
+  s.raanDot=-1.5*f*s.n*cosi;
+  s.argpDot=0.75*f*s.n*(5*cosi*cosi-1);
+  s.mDot=s.n*(1+1.5*f*Math.sqrt(beta2)*(1.5*cosi*cosi-0.5));
+  return s;
+}
+
+// Position in the TEME frame (km) at tmin minutes past the element epoch.
+function teme(s,tmin){
+  const M=s.M0+s.mDot*tmin;
+  const argp=s.argp+s.argpDot*tmin;
+  const raan=s.raan+s.raanDot*tmin;
+  let E=M;
+  for(let k=0;k<8;k++) E-=(E-s.e*Math.sin(E)-M)/(1-s.e*Math.cos(E));
+  const xw=s.a*(Math.cos(E)-s.e), yw=s.a*Math.sqrt(1-s.e*s.e)*Math.sin(E);
+  const cw=Math.cos(argp), sw=Math.sin(argp);
+  const x=xw*cw-yw*sw, y=xw*sw+yw*cw;
+  const co=Math.cos(raan), so=Math.sin(raan), ci=Math.cos(s.i), si=Math.sin(s.i);
+  return {X:(x*co-y*ci*so)*XKMPER, Y:(x*so+y*ci*co)*XKMPER, Z:y*si*XKMPER};
+}
+
 function computeAll(){
+  const lat=site.lat*DEG, lon=site.lon*DEG;
+  const Xo=Re*Math.cos(lat)*Math.cos(lon);
+  const Yo=Re*Math.cos(lat)*Math.sin(lon);
+  const Zo=Re*Math.sin(lat);
   for(const s of sats) s.pts=[];
   for(let i=0;i<N;i++){
-    const t=i*120;
-    const gmst=omegaE*t;
+    const ms=startMs+i*STEP_S*1000;
+    const gmst=gmstRad(ms);
+    const cg=Math.cos(gmst), sg=Math.sin(gmst);
     for(const s of sats){
-      const M=s.M0+n*t;
-      const xo=r*Math.cos(M), yo=r*Math.sin(M);
-      const y1=yo*Math.cos(inc), z1=yo*Math.sin(inc);
-      const X=xo*Math.cos(s.RAAN)-y1*Math.sin(s.RAAN);
-      const Y=xo*Math.sin(s.RAAN)+y1*Math.cos(s.RAAN);
-      const Z=z1;
-      const Xe=X*Math.cos(gmst)+Y*Math.sin(gmst);
-      const Ye=-X*Math.sin(gmst)+Y*Math.cos(gmst);
-      const Ze=Z;
-      const Xo=Re*Math.cos(lat)*Math.cos(lon);
-      const Yo=Re*Math.cos(lat)*Math.sin(lon);
-      const Zo=Re*Math.sin(lat);
+      const q=teme(s,(ms-s.epochMs)/60000);
+      const Xe=q.X*cg+q.Y*sg, Ye=-q.X*sg+q.Y*cg, Ze=q.Z;
       const dx=Xe-Xo, dy=Ye-Yo, dz=Ze-Zo;
       const east=-Math.sin(lon)*dx+Math.cos(lon)*dy;
       const north=-Math.sin(lat)*Math.cos(lon)*dx-Math.sin(lat)*Math.sin(lon)*dy+Math.cos(lat)*dz;
       const up=Math.cos(lat)*Math.cos(lon)*dx+Math.cos(lat)*Math.sin(lon)*dy+Math.sin(lat)*dz;
-      const hyp=Math.sqrt(east*east+north*north);
-      const el=Math.atan2(up,hyp)*180/Math.PI;
+      const el=Math.atan2(up,Math.sqrt(east*east+north*north))/DEG;
       const az=Math.atan2(east,north);
-      const visible=el>0;
       const rad=(90-Math.max(el,0))/90*Rmax;
-      const px=cx+rad*Math.sin(az);
-      const py=cy-rad*Math.cos(az);
-      s.pts.push({x:px,y:py,visible});
+      s.pts.push({x:cx+rad*Math.sin(az), y:cy-rad*Math.cos(az), visible:el>0, el:el, az:((az/DEG)+360)%360});
     }
   }
 }
-computeAll();
+
+// --- element sources -------------------------------------------------------
+
+function satsFromGP(gp){
+  return gp.map(o=>{
+    const meta=GPS_META[String(o.NORAD_CAT_ID)]||{};
+    const m=/PRN\s*(\d+)/.exec(o.OBJECT_NAME||'');
+    const plane=meta.plane||'';
+    return initSat({
+      norad:o.NORAD_CAT_ID,
+      name:o.OBJECT_NAME,
+      svn:meta.svn||null,
+      prn:meta.prn||(m?parseInt(m[1],10):null),
+      plane:plane,
+      block:meta.block||'',
+      color:PLANE_COLORS[plane.charAt(0)]||UNKNOWN_COLOR,
+      epochMs:Date.parse(/[zZ]$/.test(o.EPOCH)?o.EPOCH:o.EPOCH+'Z'),
+      n0:o.MEAN_MOTION*2*Math.PI/1440,
+      e:o.ECCENTRICITY,
+      i:o.INCLINATION*DEG,
+      raan:o.RA_OF_ASC_NODE*DEG,
+      argp:o.ARG_OF_PERICENTER*DEG,
+      M0:o.MEAN_ANOMALY*DEG
+    });
+  }).filter(s=>isFinite(s.epochMs)&&isFinite(s.n0)&&s.n0>0);
+}
+
+// Fallback if the live elements cannot be fetched: 24 satellites in 6 circular
+// planes, mean anomalies defined at the J2000 epoch. Illustrative only.
+function syntheticSats(){
+  const epochMs=Date.UTC(2000,0,1,12,0,0);
+  const out=[];
+  for(let p=0;p<6;p++){
+    for(let k=0;k<4;k++){
+      out.push(initSat({
+        svn:null, prn:null, plane:PLANES[p]+(k+1), block:'', name:'model satellite',
+        color:PLANE_COLORS[PLANES[p]],
+        epochMs:epochMs, n0:2*Math.PI/(43082/60), e:1e-6, i:55*DEG,
+        raan:p*60*DEG, argp:0, M0:(k*90+p*15)*DEG
+      }));
+    }
+  }
+  return out;
+}
+
+// --- drawing ---------------------------------------------------------------
 
 function cssVar(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()||'#888';}
 
@@ -233,44 +401,195 @@ function drawDome(idx){
   ctx.fillStyle=textMuted; ctx.font='10px sans-serif';
   ctx.fillText('zenith',cx,cy-8);
 
+  const first=Math.max(0,idx-TRAIL_STEPS);
+  const span=idx-first;
+  const per=Math.max(1,Math.ceil(span/TRAIL_BANDS));
   for(const s of sats){
-    ctx.beginPath();
-    let started=false;
-    for(let i=0;i<=idx;i++){
-      const p=s.pts[i];
-      if(!p.visible){started=false; continue;}
-      if(!started){ctx.moveTo(p.x,p.y); started=true;}
-      else ctx.lineTo(p.x,p.y);
+    ctx.strokeStyle=s.color; ctx.lineWidth=1.4;
+    for(let lo=first;lo<idx;lo+=per){
+      const hi=Math.min(idx,lo+per);
+      const fresh=(hi-first)/span; // 0 at the fading tail, 1 at the satellite
+      ctx.globalAlpha=(s===hovered?1:0.75)*(0.12+0.88*fresh);
+      ctx.beginPath();
+      let started=false;
+      for(let i=lo;i<=hi;i++){
+        const p=s.pts[i];
+        if(!p.visible){started=false; continue;}
+        if(!started){ctx.moveTo(p.x,p.y); started=true;}
+        else ctx.lineTo(p.x,p.y);
+      }
+      ctx.stroke();
     }
-    ctx.strokeStyle=s.color; ctx.lineWidth=1.4; ctx.globalAlpha=0.75;
-    ctx.stroke();
     ctx.globalAlpha=1;
+  }
+
+  ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.font='10px sans-serif';
+  for(const s of sats){
     const cur=s.pts[idx];
-    if(cur.visible){
-      ctx.beginPath(); ctx.arc(cur.x,cur.y,3.5,0,7);
-      ctx.fillStyle=s.color; ctx.fill();
+    if(!cur.visible) continue;
+    ctx.beginPath(); ctx.arc(cur.x,cur.y,s===hovered?5:3.5,0,7);
+    ctx.fillStyle=s.color; ctx.fill();
+    if(s.svn){
+      ctx.lineWidth=2.5; ctx.strokeStyle=cssVar('--panel');
+      ctx.strokeText(s.svn,cur.x+7,cur.y);
+      ctx.fillStyle=s===hovered?cssVar('--text-primary'):textSec;
+      ctx.fillText(s.svn,cur.x+7,cur.y);
     }
   }
 }
 
+// --- UI --------------------------------------------------------------------
+
 const clockEl=document.getElementById('clock');
+const dateEl=document.getElementById('dateLabel');
+const locLabelEl=document.getElementById('locLabel');
+const locBtn=document.getElementById('locBtn');
+const subtitleEl=document.getElementById('subtitle');
+const dataEl=document.getElementById('dataLabel');
+const hoverEl=document.getElementById('hoverInfo');
+const legendEl=document.getElementById('legend');
 const slider=document.getElementById('timeSlider');
 const speedSlider=document.getElementById('speedSlider');
 const speedOut=document.getElementById('speedOut');
 const playBtn=document.getElementById('playBtn');
 const playIcon=document.getElementById('playIcon');
 const resetBtn=document.getElementById('resetBtn');
-let idx=0, playing=false, rafId=null, acc=0;
+let idx=0, playing=false, rafId=null, acc=0, hovered=null;
+
+const timeFmt=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'});
+const dateFmt=new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric',month:'short'});
+const stampFmt=new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+
+function elapsedLabel(){
+  if(idx===0) return 'now';
+  const mins=idx*STEP_S/60;
+  const h=Math.floor(mins/60), m=mins%60;
+  return '+'+(h?h+'h ':'')+m+'m';
+}
 
 function render(){
   drawDome(idx);
-  const totalMin=idx*2;
-  const hh=String(Math.floor(totalMin/60)).padStart(2,'0');
-  const mm=String(totalMin%60).padStart(2,'0');
-  clockEl.textContent=hh+':'+mm;
+  const d=new Date(startMs+idx*STEP_S*1000);
+  clockEl.textContent=timeFmt.format(d);
+  dateEl.textContent=dateFmt.format(d)+' · '+elapsedLabel();
   slider.value=idx;
+  updateHoverInfo();
 }
-render();
+
+function updateHoverInfo(){
+  if(!hovered||!hovered.pts[idx].visible){
+    const up=sats.filter(s=>s.pts[idx].visible).length;
+    hoverEl.textContent=up+' of '+sats.length+' satellites above the horizon — hover one for details';
+    return;
+  }
+  const p=hovered.pts[idx];
+  const bits=[];
+  if(hovered.svn) bits.push('SVN '+hovered.svn);
+  if(hovered.prn) bits.push('PRN '+String(hovered.prn).padStart(2,'0'));
+  if(hovered.block) bits.push('Block '+hovered.block);
+  if(hovered.plane) bits.push('plane '+hovered.plane);
+  bits.push('el '+p.el.toFixed(0)+'° az '+p.az.toFixed(0)+'°');
+  hoverEl.textContent=bits.join(' · ');
+}
+
+function fmtCoord(v,pos,neg){
+  return Math.abs(v).toFixed(2)+'°'+(v>=0?pos:neg);
+}
+
+function updateLocation(){
+  locLabelEl.textContent=fmtCoord(site.lat,'N','S')+', '+fmtCoord(site.lon,'E','W');
+  subtitleEl.textContent='Timelapse simulation — lying on your back at '+site.label;
+}
+
+function drawLegend(){
+  const seen=PLANES.filter(p=>sats.some(s=>s.plane.charAt(0)===p));
+  legendEl.innerHTML=seen.map(p=>{
+    const n=sats.filter(s=>s.plane.charAt(0)===p).length;
+    return '<span><i class="swatch" style="background:'+PLANE_COLORS[p]+'"></i>Plane '+p+' ('+n+')</span>';
+  }).join('');
+}
+
+function resetToNow(){
+  startMs=Date.now();
+  computeAll();
+  idx=0;
+  render();
+}
+
+function useSats(list,note){
+  sats=list;
+  hovered=null;
+  dataEl.textContent=note;
+  drawLegend();
+  resetToNow();
+}
+
+function loadElements(){
+  fetch(TLE_URL,{cache:'no-store'})
+    .then(r=>{if(!r.ok) throw new Error('HTTP '+r.status); return r.json();})
+    .then(gp=>{
+      const list=satsFromGP(gp);
+      if(!list.length) throw new Error('no usable element sets');
+      const newest=Math.max.apply(null,list.map(s=>s.epochMs));
+      const ageH=(Date.now()-newest)/3600000;
+      useSats(list,'Live orbital elements — '+list.length+' operational GPS satellites from CelesTrak, newest epoch '
+        +stampFmt.format(new Date(newest))+' ('+(ageH<1?'<1':ageH.toFixed(0))+'h old). SVN, PRN, plane and block from NAVCEN.');
+    })
+    .catch(err=>{
+      useSats(syntheticSats(),'Could not fetch live elements ('+err.message+') — showing an illustrative 24-satellite model, so these are not real satellites.');
+    });
+}
+
+function requestLocation(silent){
+  if(!navigator.geolocation){
+    if(!silent){locBtn.textContent='Geolocation unavailable'; locBtn.disabled=true;}
+    return;
+  }
+  locBtn.textContent='Locating…'; locBtn.disabled=true;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    site={lat:pos.coords.latitude,lon:pos.coords.longitude,label:'your location'};
+    locBtn.textContent='Using your location';
+    locBtn.disabled=true;
+    updateLocation();
+    resetToNow();
+  },err=>{
+    locBtn.disabled=false;
+    locBtn.textContent=err.code===1
+      ? 'Location denied — using default'
+      : 'Location unavailable — retry';
+  },{enableHighAccuracy:false,timeout:10000,maximumAge:600000});
+}
+
+locBtn.addEventListener('click',()=>requestLocation(false));
+
+// Only auto-locate if the user has already granted permission — otherwise wait for the button.
+if(navigator.permissions&&navigator.permissions.query){
+  navigator.permissions.query({name:'geolocation'}).then(st=>{
+    if(st.state==='granted') requestLocation(true);
+  }).catch(()=>{});
+}
+
+function pointerMove(ev){
+  const rect=canvas.getBoundingClientRect();
+  const scale=W/rect.width;
+  const mx=(ev.clientX-rect.left)*scale, my=(ev.clientY-rect.top)*scale;
+  let best=null, bestD=14*14;
+  for(const s of sats){
+    const p=s.pts[idx];
+    if(!p.visible) continue;
+    const d=(p.x-mx)*(p.x-mx)+(p.y-my)*(p.y-my);
+    if(d<bestD){bestD=d; best=s;}
+  }
+  if(best!==hovered){hovered=best; render();}
+}
+
+canvas.addEventListener('mousemove',pointerMove);
+canvas.addEventListener('mouseleave',()=>{if(hovered){hovered=null; render();}});
+canvas.addEventListener('pointerdown',pointerMove);
+
+updateLocation();
+useSats(syntheticSats(),'Loading live orbital elements…');
+loadElements();
 
 slider.addEventListener('input',()=>{idx=parseInt(slider.value,10); render();});
 speedSlider.addEventListener('input',()=>{speedOut.textContent='x'+speedSlider.value;});
@@ -305,9 +624,9 @@ playBtn.addEventListener('click',()=>{
   else if(rafId) cancelAnimationFrame(rafId);
 });
 resetBtn.addEventListener('click',()=>{
-  idx=0; playing=false; if(rafId) cancelAnimationFrame(rafId);
+  playing=false; if(rafId) cancelAnimationFrame(rafId);
   setPlayIcon(false);
-  render();
+  resetToNow();
 });
 })();
 </script>
