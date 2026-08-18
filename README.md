@@ -23,7 +23,15 @@ Neither NAVCEN nor the GSC sends CORS headers, so those two tables cannot be fet
 python3 tools/update-gnss-metadata.py
 ```
 
-The GPS table is keyed by NORAD catalogue number, which never changes for a given spacecraft, whereas a PRN can be reassigned when a satellite is retired. Re-run it after a launch or decommissioning; without it, new satellites still plot but show no label.
+The GPS table is keyed by NORAD catalogue number, which never changes for a given spacecraft, whereas a PRN can be reassigned when a satellite is retired.
+
+### Keeping it current
+
+The orbital elements need no maintenance -- the page fetches them live on every load, so new launches and retirements track reality on their own. Only the two identity tables above go stale, and they are refreshed monthly by `.github/workflows/refresh-gnss-metadata.yml`, which runs the tool and commits only when something actually changed. Run it by hand from the Actions tab at any time; change the `cron` line to `'17 4 * * 1'` for weekly, which is worth doing if you care about Galileo service status, the fastest-moving field of the lot.
+
+Note that GitHub disables scheduled workflows in a repository with no activity for 60 days; a manual run re-arms it.
+
+If a table does fall behind, the failure is cosmetic rather than broken: a satellite missing from it still plots and animates correctly, because its position comes from the live elements. It simply loses its label, and in a single-constellation view its plane colour.
 
 **QZSS is deliberately absent.** It is a regional system serving the Asia-Pacific: from the UK its satellites peak at 1.3 degrees elevation, so they never meaningfully rise. Adding it back is one line in `CONSTELLATIONS` (`{key:'qzss', name:'QZSS', color:'#7F77DD', on:false, match:/^QZS-/}`) plus an `identify()` branch -- worth doing if you view the page from Asia or Australasia. Note that BeiDou has the same regional element: its GEO and IGSO satellites sit over Asia, and only the ~33 MEO satellites are a global service.
 

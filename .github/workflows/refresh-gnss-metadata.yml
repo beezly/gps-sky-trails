@@ -1,0 +1,51 @@
+# Keeps the SVN / SV ID tables baked into index.html in step with the real
+# constellations. The orbital elements themselves are fetched live by the page
+# and need no maintenance -- this is only the identity metadata, which comes
+# from sources that send no CORS headers and so cannot be read from the page.
+#
+# Commits only when something actually changed; the commit publishes itself,
+# since Pages deploys from main. Note that GitHub disables scheduled workflows
+# in a repository with no activity for 60 days -- a manual run re-arms it.
+name: Refresh GNSS metadata
+
+on:
+  schedule:
+    - cron: '17 4 1 * *'   # 04:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-gnss-metadata
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Refresh tables from NAVCEN, CelesTrak and the GSC
+        run: |
+          set -eo pipefail
+          python3 tools/update-gnss-metadata.py | tee /tmp/summary.txt
+
+      - name: Commit if anything changed
+        run: |
+          set -eo pipefail
+          if git diff --quiet -- index.html; then
+            echo "Tables already match the published constellations — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Refresh GNSS constellation metadata" \
+                     -m "$(grep -E '^(GPS|Galileo):' /tmp/summary.txt)" \
+                     -- index.html
+          git push
+          echo "Pushed; GitHub Pages will rebuild from main."
