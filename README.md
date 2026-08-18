@@ -29,19 +29,32 @@ The GPS table is keyed by NORAD catalogue number, which never changes for a give
 
 The orbital elements need no maintenance -- the page fetches them live on every load, so new launches and retirements track reality on their own. Only the two identity tables above go stale, and they are refreshed every Monday by `.github/workflows/refresh-gnss-metadata.yml`, which runs the tool and commits only when something actually changed. Run it by hand from the Actions tab at any time.
 
-One caveat: GitHub disables scheduled workflows in a **public** repository after 60 days with no repository activity. Workflow runs do not count as activity, and this one commits only when a constellation actually changes -- a few times a year, by the Actions bot -- so it will not reliably keep itself alive. It fails visibly rather than silently: GitHub emails the repository admins when it disables a workflow. Re-enable it from the Actions tab, or with
+### Keeping the schedule alive
+
+GitHub disables scheduled workflows in a **public** repository after 60 days with no repository activity, and workflow runs are not activity. Two things guard against that:
+
+- Pushes use `REFRESH_PAT`, a fine-grained token owned by a person, so they count unambiguously as repository activity. Without the secret the workflow falls back to `GITHUB_TOKEN` and still works -- it just loses that guarantee.
+- A heartbeat: if nothing has been committed for 40 days, the workflow writes the date it last checked to `.github/last-refresh.txt` and commits that. The constellations change only a few times a year, so without this the repository could easily sit quiet past the 60-day limit.
+
+Setting up the token (do this yourself -- the value should never be pasted into a shell or shared):
+
+1. GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token.
+2. Repository access: only `beezly/gps-sky-trails`. Repository permissions: **Contents → Read and write**. Nothing else is needed.
+3. Add it as a repository secret, which prompts for the value rather than taking it as an argument:
+
+   ```
+   gh secret set REFRESH_PAT --repo beezly/gps-sky-trails
+   ```
+
+Fine-grained tokens expire. When it does, the push step fails and GitHub emails you about the failed run -- worth a calendar note near the expiry date, since the workflow will otherwise keep succeeding at the fetch and failing at the push.
+
+If the workflow is disabled anyway, re-enable it from the Actions tab or with
 
 ```
 gh api -X PUT repos/beezly/gps-sky-trails/actions/workflows/refresh-gnss-metadata.yml/enable
 ```
 
-Any push to the repository resets the 60-day clock. If you want the schedule to be genuinely self-sustaining, push using a personal access token stored as a secret instead of the default `GITHUB_TOKEN`, so the commits are attributed to you and count as repository activity.
-
 If a table does fall behind, the failure is cosmetic rather than broken: a satellite missing from it still plots and animates correctly, because its position comes from the live elements. It simply loses its label, and in a single-constellation view its plane colour.
-
-**QZSS is deliberately absent.** It is a regional system serving the Asia-Pacific: from the UK its satellites peak at 1.3 degrees elevation, so they never meaningfully rise. Adding it back is one line in `CONSTELLATIONS` (`{key:'qzss', name:'QZSS', color:'#7F77DD', on:false, match:/^QZS-/}`) plus an `identify()` branch -- worth doing if you view the page from Asia or Australasia. Note that BeiDou has the same regional element: its GEO and IGSO satellites sit over Asia, and only the ~33 MEO satellites are a global service.
-
-If the element sets cannot be fetched (offline, or opened as a `file://` URL), the page falls back to an illustrative 24-satellite model and says so.
 
 ## Accuracy
 
