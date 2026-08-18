@@ -27,6 +27,11 @@ on:
   schedule:
     - cron: '17 4 * * 1'   # 04:17 UTC every Monday
   workflow_dispatch:
+    inputs:
+      force_heartbeat:
+        description: 'Write the heartbeat commit even if the repository is active (verifies the push credentials)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -76,7 +81,7 @@ jobs:
           set -eo pipefail
           AGE=$(( ( $(date -u +%s) - $(git log -1 --format=%ct) ) / 86400 ))
           echo "Last commit was $AGE days ago."
-          if [ "$AGE" -lt 40 ]; then
+          if [ "$AGE" -lt 40 ] && [ "${{ inputs.force_heartbeat }}" != "true" ]; then
             echo "Inside the 60-day window with room to spare — no heartbeat needed."
             exit 0
           fi
