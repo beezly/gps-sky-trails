@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPS sky trails — Nettleton Hill</title>
+<style>
+  :root{
+    --bg:#f7f6f2;
+    --panel:#ffffff;
+    --border:#d8d6cd;
+    --text-primary:#1c1c1a;
+    --text-secondary:#5f5e5a;
+    --text-muted:#8a8880;
+    --accent:#378ADD;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17171a;
+      --panel:#1f1f22;
+      --border:#3a3a3d;
+      --text-primary:#f2f1ec;
+      --text-secondary:#b4b2a9;
+      --text-muted:#888780;
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    min-height:100vh;
+    background:var(--bg);
+    color:var(--text-primary);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:2rem 1rem;
+  }
+  .wrap{
+    width:100%;
+    max-width:520px;
+    background:var(--panel);
+    border:0.5px solid var(--border);
+    border-radius:16px;
+    padding:1.5rem;
+  }
+  h1{
+    font-size:18px;
+    font-weight:500;
+    margin:0 0 4px;
+  }
+  .sub{
+    font-size:13px;
+    color:var(--text-secondary);
+    margin:0 0 1.25rem;
+  }
+  .top-row{
+    display:flex;
+    justify-content:space-between;
+    width:100%;
+    font-size:13px;
+    color:var(--text-secondary);
+    margin-bottom:8px;
+  }
+  #clock{font-weight:600; color:var(--text-primary);}
+  canvas{
+    width:100%;
+    max-width:480px;
+    display:block;
+    margin:0 auto;
+    touch-action:none;
+  }
+  .controls{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    width:100%;
+    margin-top:14px;
+  }
+  .controls + .controls{margin-top:10px;}
+  label.small{
+    font-size:13px;
+    color:var(--text-secondary);
+    white-space:nowrap;
+  }
+  input[type=range]{
+    flex:1;
+    accent-color:var(--accent);
+  }
+  button{
+    width:36px;
+    height:36px;
+    padding:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    background:transparent;
+    border:0.5px solid var(--border);
+    border-radius:8px;
+    color:var(--text-primary);
+    cursor:pointer;
+  }
+  button:hover{background:rgba(128,128,128,0.1);}
+  button:active{transform:scale(0.97);}
+  #speedOut{
+    font-size:13px;
+    min-width:32px;
+    color:var(--text-secondary);
+  }
+  .note{
+    font-size:12px;
+    color:var(--text-muted);
+    margin-top:1rem;
+    line-height:1.5;
+  }
+  svg.icon{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GPS sky trails</h1>
+  <p class="sub">Timelapse simulation — lying on your back at Nettleton Hill, West Yorkshire</p>
+
+  <div class="top-row">
+    <span>53.65N, 1.83W</span>
+    <span id="clock">00:00</span>
+  </div>
+
+  <canvas id="dome" width="480" height="480"></canvas>
+
+  <div class="controls">
+    <button id="playBtn" aria-label="Play">
+      <svg class="icon" id="playIcon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
+    </button>
+    <input type="range" id="timeSlider" min="0" max="719" step="1" value="0">
+    <button id="resetBtn" aria-label="Reset">
+      <svg class="icon" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+    </button>
+  </div>
+  <div class="controls">
+    <label class="small">Speed</label>
+    <input type="range" id="speedSlider" min="1" max="8" step="1" value="3">
+    <span id="speedOut">x3</span>
+  </div>
+
+  <p class="note">Simplified circular-orbit model: 24 satellites, 6 orbital planes at 55&deg; inclination, ~12-hour period. Each colour is one orbital plane. Illustrative, not real ephemeris data.</p>
+</div>
+
+<script>
+(function(){
+const canvas=document.getElementById('dome');
+const ctx=canvas.getContext('2d');
+const DPR=window.devicePixelRatio||1;
+canvas.width=480*DPR; canvas.height=480*DPR;
+ctx.scale(DPR,DPR);
+const W=480,H=480,cx=240,cy=240,Rmax=200;
+
+const lat=53.65*Math.PI/180, lon=-1.83*Math.PI/180;
+const Re=6378, alt=20200, r=Re+alt;
+const inc=55*Math.PI/180;
+const T=43082;
+const n=2*Math.PI/T;
+const omegaE=2*Math.PI/86164;
+const colors=['#7F77DD','#1D9E75','#D85A30','#D4537E','#378ADD','#BA7517'];
+const sats=[];
+for(let p=0;p<6;p++){
+  const RAAN=p*60*Math.PI/180;
+  for(let k=0;k<4;k++){
+    const M0=(k*90 + p*15)*Math.PI/180;
+    sats.push({RAAN,M0,color:colors[p]});
+  }
+}
+
+const N=720; // 2-min steps over 24h
+function computeAll(){
+  for(const s of sats) s.pts=[];
+  for(let i=0;i<N;i++){
+    const t=i*120;
+    const gmst=omegaE*t;
+    for(const s of sats){
+      const M=s.M0+n*t;
+      const xo=r*Math.cos(M), yo=r*Math.sin(M);
+      const y1=yo*Math.cos(inc), z1=yo*Math.sin(inc);
+      const X=xo*Math.cos(s.RAAN)-y1*Math.sin(s.RAAN);
+      const Y=xo*Math.sin(s.RAAN)+y1*Math.cos(s.RAAN);
+      const Z=z1;
+      const Xe=X*Math.cos(gmst)+Y*Math.sin(gmst);
+      const Ye=-X*Math.sin(gmst)+Y*Math.cos(gmst);
+      const Ze=Z;
+      const Xo=Re*Math.cos(lat)*Math.cos(lon);
+      const Yo=Re*Math.cos(lat)*Math.sin(lon);
+      const Zo=Re*Math.sin(lat);
+      const dx=Xe-Xo, dy=Ye-Yo, dz=Ze-Zo;
+      const east=-Math.sin(lon)*dx+Math.cos(lon)*dy;
+      const north=-Math.sin(lat)*Math.cos(lon)*dx-Math.sin(lat)*Math.sin(lon)*dy+Math.cos(lat)*dz;
+      const up=Math.cos(lat)*Math.cos(lon)*dx+Math.cos(lat)*Math.sin(lon)*dy+Math.sin(lat)*dz;
+      const hyp=Math.sqrt(east*east+north*north);
+      const el=Math.atan2(up,hyp)*180/Math.PI;
+      const az=Math.atan2(east,north);
+      const visible=el>0;
+      const rad=(90-Math.max(el,0))/90*Rmax;
+      const px=cx+rad*Math.sin(az);
+      const py=cy-rad*Math.cos(az);
+      s.pts.push({x:px,y:py,visible});
+    }
+  }
+}
+computeAll();
+
+function cssVar(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()||'#888';}
+
+function drawDome(idx){
+  ctx.clearRect(0,0,W,H);
+  const border=cssVar('--border');
+  const textMuted=cssVar('--text-muted');
+  const textSec=cssVar('--text-secondary');
+  ctx.strokeStyle=border; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(cx,cy,Rmax,0,7); ctx.stroke();
+  ctx.setLineDash([2,4]);
+  [30,60].forEach(el=>{
+    const rad=(90-el)/90*Rmax;
+    ctx.beginPath(); ctx.arc(cx,cy,rad,0,7); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(cx-Rmax,cy); ctx.lineTo(cx+Rmax,cy);
+  ctx.moveTo(cx,cy-Rmax); ctx.lineTo(cx,cy+Rmax); ctx.stroke();
+  ctx.fillStyle=textSec; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('N',cx,cy-Rmax-10);
+  ctx.fillText('S',cx,cy+Rmax+10);
+  ctx.fillText('E',cx+Rmax+10,cy);
+  ctx.fillText('W',cx-Rmax-10,cy);
+  ctx.fillStyle=textMuted; ctx.font='10px sans-serif';
+  ctx.fillText('zenith',cx,cy-8);
+
+  for(const s of sats){
+    ctx.beginPath();
+    let started=false;
+    for(let i=0;i<=idx;i++){
+      const p=s.pts[i];
+      if(!p.visible){started=false; continue;}
+      if(!started){ctx.moveTo(p.x,p.y); started=true;}
+      else ctx.lineTo(p.x,p.y);
+    }
+    ctx.strokeStyle=s.color; ctx.lineWidth=1.4; ctx.globalAlpha=0.75;
+    ctx.stroke();
+    ctx.globalAlpha=1;
+    const cur=s.pts[idx];
+    if(cur.visible){
+      ctx.beginPath(); ctx.arc(cur.x,cur.y,3.5,0,7);
+      ctx.fillStyle=s.color; ctx.fill();
+    }
+  }
+}
+
+const clockEl=document.getElementById('clock');
+const slider=document.getElementById('timeSlider');
+const speedSlider=document.getElementById('speedSlider');
+const speedOut=document.getElementById('speedOut');
+const playBtn=document.getElementById('playBtn');
+const playIcon=document.getElementById('playIcon');
+const resetBtn=document.getElementById('resetBtn');
+let idx=0, playing=false, rafId=null, acc=0;
+
+function render(){
+  drawDome(idx);
+  const totalMin=idx*2;
+  const hh=String(Math.floor(totalMin/60)).padStart(2,'0');
+  const mm=String(totalMin%60).padStart(2,'0');
+  clockEl.textContent=hh+':'+mm;
+  slider.value=idx;
+}
+render();
+
+slider.addEventListener('input',()=>{idx=parseInt(slider.value,10); render();});
+speedSlider.addEventListener('input',()=>{speedOut.textContent='x'+speedSlider.value;});
+
+let lastTs=null;
+function tick(ts){
+  if(!playing) return;
+  if(lastTs===null) lastTs=ts;
+  const dt=ts-lastTs; lastTs=ts;
+  acc+=dt;
+  const speed=parseInt(speedSlider.value,10);
+  const stepEvery=120/speed;
+  if(acc>=stepEvery){
+    acc=0;
+    idx=(idx+1)%N;
+    render();
+  }
+  rafId=requestAnimationFrame(tick);
+}
+
+function setPlayIcon(isPlaying){
+  playIcon.innerHTML = isPlaying
+    ? '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>'
+    : '<polygon points="6 3 20 12 6 21 6 3"></polygon>';
+  playBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
+}
+
+playBtn.addEventListener('click',()=>{
+  playing=!playing;
+  setPlayIcon(playing);
+  if(playing){lastTs=null; rafId=requestAnimationFrame(tick);}
+  else if(rafId) cancelAnimationFrame(rafId);
+});
+resetBtn.addEventListener('click',()=>{
+  idx=0; playing=false; if(rafId) cancelAnimationFrame(rafId);
+  setPlayIcon(false);
+  render();
+});
+})();
+</script>
+</body>
+</html>
