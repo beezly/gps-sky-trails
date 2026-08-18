@@ -1,0 +1,2 @@
+Scheduled metadata refresh last checked the constellations on 2026-08-18.
+The tables in index.html were already current. See .github/workflows/refresh-gnss-metadata.yml.
