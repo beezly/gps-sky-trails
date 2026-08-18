@@ -122,6 +122,34 @@
     min-width:32px;
     color:var(--text-secondary);
   }
+  .toggles{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    margin-top:14px;
+  }
+  .chip{
+    width:auto;
+    height:auto;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:5px 10px;
+    font:inherit;
+    font-size:12px;
+    border:0.5px solid var(--border);
+    border-radius:999px;
+    color:var(--text-secondary);
+    background:transparent;
+    cursor:pointer;
+  }
+  .chip[aria-pressed="true"]{
+    color:var(--text-primary);
+    border-color:currentColor;
+  }
+  .chip .swatch{opacity:0.25;}
+  .chip[aria-pressed="true"] .swatch{opacity:1;}
+  .chip .count{color:var(--text-muted);}
   .legend{
     display:flex;
     flex-wrap:wrap;
@@ -185,10 +213,12 @@
     <span id="speedOut">x3</span>
   </div>
 
+  <div class="toggles" id="spans"></div>
+  <div class="toggles" id="toggles"></div>
   <div class="legend" id="legend"></div>
   <p id="dataLabel">Loading live orbital elements&hellip;</p>
 
-  <p class="note">Numbers beside each dot are SVNs (space vehicle numbers); colour is the orbital plane. Trails fade out over about 11.5 hours &mdash; just under one orbit &mdash; so each track is roughly a single pass. Starts at your current time and steps forward 24 hours in 2-minute increments. Positions come from live CelesTrak element sets for the operational GPS constellation; SVN, PRN, plane and block are from the NAVCEN constellation status. If the elements cannot be fetched, the page falls back to an illustrative 24-satellite model.</p>
+  <p class="note">Each dot is labelled with its identifier: GPS by SVN (space vehicle number), GLONASS by GLONASS number, Galileo by SV ID and BeiDou by PRN. With one constellation shown, colour is the orbital plane; with several, colour is the constellation. Trails fade out over about 11.5 hours &mdash; just under one orbit &mdash; so each track is roughly a single pass. Starts at your current time and steps forward in 2-minute increments over the span you pick, up to 7 days. Positions come from live CelesTrak element sets; GPS SVN, PRN, plane and block are from the NAVCEN constellation status, and Galileo SV IDs from the GSC constellation information. If the elements cannot be fetched, the page falls back to an illustrative 24-satellite model.</p>
 </div>
 
 <script>
@@ -204,9 +234,7 @@ const DEFAULT_SITE={lat:53.65,lon:-1.83,label:'Nettleton Hill, West Yorkshire'};
 let site={lat:DEFAULT_SITE.lat,lon:DEFAULT_SITE.lon,label:DEFAULT_SITE.label};
 
 // SVN / PRN / plane / block for each operational GPS satellite, keyed by NORAD
-// catalogue number. Sourced from the NAVCEN constellation status and joined to
-// CelesTrak by PRN — regenerate with tools/update-gps-metadata.py. NAVCEN sends
-// no CORS headers, so this cannot be fetched from the page at runtime.
+// catalogue number, from the NAVCEN constellation status.
 const GPS_META={
 /* SVN_TABLE_START */
   68791:{svn:43,prn:13,plane:'A5',block:'IIR'},
@@ -244,7 +272,57 @@ const GPS_META={
 /* SVN_TABLE_END */
 };
 
-const TLE_URL='https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=json';
+// Galileo SV ID (the E-code broadcast as its PRN) and service status, keyed by
+// the GSAT serial in the object name, from the GSC constellation information.
+const GALILEO_META={
+/* GALILEO_TABLE_START */
+  GSAT0101:{svid:'E11',status:'USABLE'},
+  GSAT0102:{svid:'E12',status:'USABLE'},
+  GSAT0103:{svid:'E19',status:'USABLE'},
+  GSAT0201:{svid:'E18',status:'NOT USABLE'},
+  GSAT0202:{svid:'E14',status:'NOT USABLE'},
+  GSAT0203:{svid:'E26',status:'USABLE'},
+  GSAT0204:{svid:'E22',status:'NOT USABLE'},
+  GSAT0206:{svid:'E30',status:'USABLE'},
+  GSAT0207:{svid:'E07',status:'USABLE'},
+  GSAT0208:{svid:'E08',status:'USABLE'},
+  GSAT0209:{svid:'E09',status:'USABLE'},
+  GSAT0210:{svid:'E01',status:'NOT USABLE'},
+  GSAT0211:{svid:'E02',status:'USABLE'},
+  GSAT0212:{svid:'E03',status:'USABLE'},
+  GSAT0213:{svid:'E04',status:'USABLE'},
+  GSAT0214:{svid:'E05',status:'USABLE'},
+  GSAT0215:{svid:'E21',status:'USABLE'},
+  GSAT0216:{svid:'E25',status:'USABLE'},
+  GSAT0217:{svid:'E27',status:'USABLE'},
+  GSAT0218:{svid:'E31',status:'USABLE'},
+  GSAT0219:{svid:'E36',status:'USABLE'},
+  GSAT0220:{svid:'E13',status:'USABLE'},
+  GSAT0221:{svid:'E15',status:'USABLE'},
+  GSAT0222:{svid:'E33',status:'USABLE'},
+  GSAT0223:{svid:'E34',status:'USABLE'},
+  GSAT0224:{svid:'E10',status:'USABLE'},
+  GSAT0225:{svid:'E29',status:'USABLE'},
+  GSAT0226:{svid:'E23',status:'USABLE'},
+  GSAT0227:{svid:'E06',status:'USABLE'},
+  GSAT0232:{svid:'E16',status:'USABLE'},
+  GSAT0233:{svid:'E28',status:'USABLE'},
+  GSAT0234:{svid:'E32',status:'USABLE'}
+/* GALILEO_TABLE_END */
+};
+
+// Neither NAVCEN nor the GSC sends CORS headers, so those tables cannot be
+// fetched from the page — regenerate them with tools/update-gnss-metadata.py.
+// GLONASS and BeiDou need no table: CelesTrak's object names already carry the
+// GLONASS number and the BeiDou C-code.
+const GNSS_URL='https://celestrak.org/NORAD/elements/gp.php?GROUP=gnss&FORMAT=json';
+
+const CONSTELLATIONS=[
+  {key:'gps',     name:'GPS',     color:'#378ADD', on:true,  match:/^GPS /},
+  {key:'glonass', name:'GLONASS', color:'#D85A30', on:false, match:/^COSMOS /},
+  {key:'galileo', name:'Galileo', color:'#1D9E75', on:false, match:/^GSAT0\d{3}/},
+  {key:'beidou',  name:'BeiDou',  color:'#7F77DD', on:false, match:/^BEIDOU/}
+];
 const PLANES=['A','B','C','D','E','F'];
 const PLANE_COLORS={A:'#7F77DD',B:'#1D9E75',C:'#D85A30',D:'#D4537E',E:'#378ADD',F:'#BA7517'};
 const UNKNOWN_COLOR='#8a8880';
@@ -252,15 +330,19 @@ const UNKNOWN_COLOR='#8a8880';
 // SGP4 units: distances in earth radii, times in minutes.
 const XKMPER=6378.135, KE=0.0743669161, J2=1.082616e-3;
 const Re=XKMPER;
-const N=720, STEP_S=120; // 2-min steps over 24h
+const DEG=Math.PI/180;
+const STEP_S=120;                       // 2-minute samples at every span
+const SPANS=[{label:'1 day',hours:24},{label:'3 days',hours:72},{label:'7 days',hours:168}];
+let spanIdx=0;
+let N=Math.round(SPANS[0].hours*3600/STEP_S);
 // How much of each satellite's past track stays on screen: ~11h 30m, a little
-// under one orbit (11h 58m), so a trail is roughly one pass and does not lap
+// under a GPS orbit (11h 58m), so a trail is roughly one pass and does not lap
 // itself. Drawn as a few constant-alpha bands so the tail fades out cheaply.
 const TRAIL_STEPS=Math.round(11.5*3600/STEP_S);
 const TRAIL_BANDS=6;
-const DEG=Math.PI/180;
+const LABEL_LIMIT=24;   // most dots we will tag before the labels start colliding
 let startMs=Date.now();
-let sats=[];
+let allSats=[], sats=[];
 
 // Greenwich mean sidereal time (radians) for a wall-clock instant.
 function gmstRad(ms){
@@ -272,9 +354,9 @@ function gmstRad(ms){
 }
 
 // Recover the SGP4 mean elements and secular J2 rates from a TLE-style element
-// set. Drag and deep-space periodics are ignored: at GPS altitude they move a
-// satellite by a few tens of km over a day, which is under a tenth of a degree
-// in the sky — less than a pixel at this scale.
+// set. Drag and deep-space periodics are ignored: checked against a full
+// SGP4/SDP4 implementation over a 7-day span, every GNSS constellation here
+// stays within a quarter of a degree, well under a pixel at this scale.
 function initSat(s){
   const cosi=Math.cos(s.i), beta2=1-s.e*s.e;
   const a1=Math.pow(KE/s.n0,2/3);
@@ -305,47 +387,101 @@ function teme(s,tmin){
   return {X:(x*co-y*ci*so)*XKMPER, Y:(x*so+y*ci*co)*XKMPER, Z:y*si*XKMPER};
 }
 
+// Tracks are held in typed arrays: a week of 2-minute samples across every
+// constellation is ~490k points, which is far too many to keep as objects.
 function computeAll(){
+  N=Math.round(SPANS[spanIdx].hours*3600/STEP_S);
   const lat=site.lat*DEG, lon=site.lon*DEG;
   const Xo=Re*Math.cos(lat)*Math.cos(lon);
   const Yo=Re*Math.cos(lat)*Math.sin(lon);
   const Zo=Re*Math.sin(lat);
-  for(const s of sats) s.pts=[];
+  const sinLat=Math.sin(lat), cosLat=Math.cos(lat), sinLon=Math.sin(lon), cosLon=Math.cos(lon);
+  for(const s of sats){
+    s.px=new Float32Array(N); s.py=new Float32Array(N);
+    s.pel=new Float32Array(N); s.paz=new Float32Array(N);
+    s.maxEl=-90;
+  }
   for(let i=0;i<N;i++){
     const ms=startMs+i*STEP_S*1000;
     const gmst=gmstRad(ms);
     const cg=Math.cos(gmst), sg=Math.sin(gmst);
     for(const s of sats){
       const q=teme(s,(ms-s.epochMs)/60000);
-      const Xe=q.X*cg+q.Y*sg, Ye=-q.X*sg+q.Y*cg, Ze=q.Z;
-      const dx=Xe-Xo, dy=Ye-Yo, dz=Ze-Zo;
-      const east=-Math.sin(lon)*dx+Math.cos(lon)*dy;
-      const north=-Math.sin(lat)*Math.cos(lon)*dx-Math.sin(lat)*Math.sin(lon)*dy+Math.cos(lat)*dz;
-      const up=Math.cos(lat)*Math.cos(lon)*dx+Math.cos(lat)*Math.sin(lon)*dy+Math.sin(lat)*dz;
+      const Xe=q.X*cg+q.Y*sg, Ye=-q.X*sg+q.Y*cg;
+      const dx=Xe-Xo, dy=Ye-Yo, dz=q.Z-Zo;
+      const east=-sinLon*dx+cosLon*dy;
+      const north=-sinLat*cosLon*dx-sinLat*sinLon*dy+cosLat*dz;
+      const up=cosLat*cosLon*dx+cosLat*sinLon*dy+sinLat*dz;
       const el=Math.atan2(up,Math.sqrt(east*east+north*north))/DEG;
       const az=Math.atan2(east,north);
       const rad=(90-Math.max(el,0))/90*Rmax;
-      s.pts.push({x:cx+rad*Math.sin(az), y:cy-rad*Math.cos(az), visible:el>0, el:el, az:((az/DEG)+360)%360});
+      s.px[i]=cx+rad*Math.sin(az);
+      s.py[i]=cy-rad*Math.cos(az);
+      s.pel[i]=el;
+      s.paz[i]=((az/DEG)+360)%360;
+      if(el>s.maxEl) s.maxEl=el;
     }
   }
 }
 
 // --- element sources -------------------------------------------------------
 
-function satsFromGP(gp){
-  return gp.map(o=>{
+function familyOf(name){
+  for(const f of CONSTELLATIONS) if(f.match.test(name)) return f;
+  return null;
+}
+
+// Work out what to call a satellite. GPS gets its SVN from NAVCEN; Galileo its
+// E-code from the GSC; GLONASS and QZSS come straight out of the object name.
+function identify(o,fam){
+  const name=o.OBJECT_NAME||'';
+  const id={fam:fam,name:name,tag:'',plane:''};
+  if(fam.key==='gps'){
     const meta=GPS_META[String(o.NORAD_CAT_ID)]||{};
-    const m=/PRN\s*(\d+)/.exec(o.OBJECT_NAME||'');
-    const plane=meta.plane||'';
-    return initSat({
+    const m=/PRN\s*(\d+)/.exec(name);
+    id.svn=meta.svn||null;
+    id.prn=meta.prn||(m?parseInt(m[1],10):null);
+    id.plane=meta.plane||'';
+    id.block=meta.block||'';
+    id.tag=id.svn?String(id.svn):'';
+  }else if(fam.key==='glonass'){
+    // "COSMOS 2569 (764)" — the bracketed number is the GLONASS (Uragan)
+    // number, the direct analogue of a GPS SVN. Slot numbers are only
+    // published by the Russian IAC, which has no machine-readable feed.
+    const m=/\((\d{3})\)/.exec(name);
+    id.glonass=m?parseInt(m[1],10):null;
+    id.cosmos=(/^(COSMOS\s+\d+)/.exec(name)||[])[1]||'';
+    id.tag=id.glonass?String(id.glonass):'';
+  }else if(fam.key==='galileo'){
+    const g=(/^(GSAT\d{4})/.exec(name)||[])[1]||'';
+    const meta=GALILEO_META[g]||{};
+    id.gsat=g;
+    id.svid=meta.svid||'';
+    id.status=meta.status||'';
+    id.tag=id.svid;
+  }else if(fam.key==='beidou'){
+    // "BEIDOU-3 M5 (C23)" — the bracketed C-code is the PRN, and the middle
+    // segment gives the orbit: G# geostationary, IGSO-# inclined
+    // geosynchronous, M# medium earth orbit. Only the MEOs are a global
+    // service; the GEO and IGSO satellites sit over the Asia-Pacific.
+    id.code=(/\((C\d+)\)/.exec(name)||[])[1]||'';
+    id.series=(/^(BEIDOU-\w+)/.exec(name)||[])[1]||'BeiDou';
+    id.orbit=/\sG\d/.test(name)?'GEO':(/IGSO/.test(name)?'IGSO':(/\sM\d/.test(name)?'MEO':''));
+    id.tag=id.code;
+  }
+  return id;
+}
+
+function satsFromGP(gp){
+  const out=[];
+  for(const o of gp){
+    const fam=familyOf(o.OBJECT_NAME||'');
+    if(!fam) continue;
+    const epochMs=Date.parse(/[zZ]$/.test(o.EPOCH)?o.EPOCH:o.EPOCH+'Z');
+    if(!isFinite(epochMs)||!(o.MEAN_MOTION>0)) continue;
+    const s=initSat({
       norad:o.NORAD_CAT_ID,
-      name:o.OBJECT_NAME,
-      svn:meta.svn||null,
-      prn:meta.prn||(m?parseInt(m[1],10):null),
-      plane:plane,
-      block:meta.block||'',
-      color:PLANE_COLORS[plane.charAt(0)]||UNKNOWN_COLOR,
-      epochMs:Date.parse(/[zZ]$/.test(o.EPOCH)?o.EPOCH:o.EPOCH+'Z'),
+      epochMs:epochMs,
       n0:o.MEAN_MOTION*2*Math.PI/1440,
       e:o.ECCENTRICITY,
       i:o.INCLINATION*DEG,
@@ -353,22 +489,23 @@ function satsFromGP(gp){
       argp:o.ARG_OF_PERICENTER*DEG,
       M0:o.MEAN_ANOMALY*DEG
     });
-  }).filter(s=>isFinite(s.epochMs)&&isFinite(s.n0)&&s.n0>0);
+    Object.assign(s,identify(o,fam));
+    out.push(s);
+  }
+  return out;
 }
 
 // Fallback if the live elements cannot be fetched: 24 satellites in 6 circular
 // planes, mean anomalies defined at the J2000 epoch. Illustrative only.
 function syntheticSats(){
   const epochMs=Date.UTC(2000,0,1,12,0,0);
+  const gps=CONSTELLATIONS[0];
   const out=[];
   for(let p=0;p<6;p++){
     for(let k=0;k<4;k++){
-      out.push(initSat({
-        svn:null, prn:null, plane:PLANES[p]+(k+1), block:'', name:'model satellite',
-        color:PLANE_COLORS[PLANES[p]],
-        epochMs:epochMs, n0:2*Math.PI/(43082/60), e:1e-6, i:55*DEG,
-        raan:p*60*DEG, argp:0, M0:(k*90+p*15)*DEG
-      }));
+      const s=initSat({epochMs:epochMs, n0:2*Math.PI/(43082/60), e:1e-6, i:55*DEG,
+        raan:p*60*DEG, argp:0, M0:(k*90+p*15)*DEG});
+      out.push(Object.assign(s,{fam:gps,name:'model satellite',tag:'',plane:PLANES[p]+(k+1)}));
     }
   }
   return out;
@@ -413,10 +550,9 @@ function drawDome(idx){
       ctx.beginPath();
       let started=false;
       for(let i=lo;i<=hi;i++){
-        const p=s.pts[i];
-        if(!p.visible){started=false; continue;}
-        if(!started){ctx.moveTo(p.x,p.y); started=true;}
-        else ctx.lineTo(p.x,p.y);
+        if(s.pel[i]<=0){started=false; continue;}
+        if(!started){ctx.moveTo(s.px[i],s.py[i]); started=true;}
+        else ctx.lineTo(s.px[i],s.py[i]);
       }
       ctx.stroke();
     }
@@ -424,16 +560,19 @@ function drawDome(idx){
   }
 
   ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.font='10px sans-serif';
+  // Past a certain crowd the labels collide into an unreadable mat, so leave
+  // them to the hover readout instead.
+  const up=sats.reduce((n,s)=>n+(s.pel[idx]>0?1:0),0);
+  const labelled=up<=LABEL_LIMIT;
   for(const s of sats){
-    const cur=s.pts[idx];
-    if(!cur.visible) continue;
-    ctx.beginPath(); ctx.arc(cur.x,cur.y,s===hovered?5:3.5,0,7);
+    if(s.pel[idx]<=0) continue;
+    ctx.beginPath(); ctx.arc(s.px[idx],s.py[idx],s===hovered?5:3.5,0,7);
     ctx.fillStyle=s.color; ctx.fill();
-    if(s.svn){
+    if(s.tag&&(labelled||s===hovered)){
       ctx.lineWidth=2.5; ctx.strokeStyle=cssVar('--panel');
-      ctx.strokeText(s.svn,cur.x+7,cur.y);
+      ctx.strokeText(s.tag,s.px[idx]+7,s.py[idx]);
       ctx.fillStyle=s===hovered?cssVar('--text-primary'):textSec;
-      ctx.fillText(s.svn,cur.x+7,cur.y);
+      ctx.fillText(s.tag,s.px[idx]+7,s.py[idx]);
     }
   }
 }
@@ -448,13 +587,15 @@ const subtitleEl=document.getElementById('subtitle');
 const dataEl=document.getElementById('dataLabel');
 const hoverEl=document.getElementById('hoverInfo');
 const legendEl=document.getElementById('legend');
+const togglesEl=document.getElementById('toggles');
+const spanEl=document.getElementById('spans');
 const slider=document.getElementById('timeSlider');
 const speedSlider=document.getElementById('speedSlider');
 const speedOut=document.getElementById('speedOut');
 const playBtn=document.getElementById('playBtn');
 const playIcon=document.getElementById('playIcon');
 const resetBtn=document.getElementById('resetBtn');
-let idx=0, playing=false, rafId=null, acc=0, hovered=null;
+let idx=0, playing=false, rafId=null, acc=0, hovered=null, sourceNote='';
 
 const timeFmt=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'});
 const dateFmt=new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric',month:'short'});
@@ -463,8 +604,8 @@ const stampFmt=new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',ho
 function elapsedLabel(){
   if(idx===0) return 'now';
   const mins=idx*STEP_S/60;
-  const h=Math.floor(mins/60), m=mins%60;
-  return '+'+(h?h+'h ':'')+m+'m';
+  const d=Math.floor(mins/1440), h=Math.floor((mins%1440)/60), m=mins%60;
+  return '+'+(d?d+'d ':'')+(d||h?h+'h ':'')+m+'m';
 }
 
 function render(){
@@ -477,18 +618,35 @@ function render(){
 }
 
 function updateHoverInfo(){
-  if(!hovered||!hovered.pts[idx].visible){
-    const up=sats.filter(s=>s.pts[idx].visible).length;
-    hoverEl.textContent=up+' of '+sats.length+' satellites above the horizon — hover one for details';
+  if(!hovered||hovered.pel[idx]<=0){
+    const up=sats.filter(s=>s.pel[idx]>0).length;
+    hoverEl.textContent=sats.length
+      ? up+' of '+sats.length+' satellites above the horizon — hover one for '
+        +(up>LABEL_LIMIT?'its label and details':'details')
+      : 'No constellations selected';
     return;
   }
-  const p=hovered.pts[idx];
-  const bits=[];
-  if(hovered.svn) bits.push('SVN '+hovered.svn);
-  if(hovered.prn) bits.push('PRN '+String(hovered.prn).padStart(2,'0'));
-  if(hovered.block) bits.push('Block '+hovered.block);
-  if(hovered.plane) bits.push('plane '+hovered.plane);
-  bits.push('el '+p.el.toFixed(0)+'° az '+p.az.toFixed(0)+'°');
+  const s=hovered, bits=[];
+  if(s.fam.key==='gps'){
+    if(s.svn) bits.push('SVN '+s.svn);
+    if(s.prn) bits.push('PRN '+String(s.prn).padStart(2,'0'));
+    if(s.block) bits.push('Block '+s.block);
+    if(s.plane) bits.push('plane '+s.plane);
+  }else if(s.fam.key==='glonass'){
+    bits.push('GLONASS');
+    if(s.glonass) bits.push('No. '+s.glonass);
+    if(s.cosmos) bits.push(s.cosmos);
+  }else if(s.fam.key==='galileo'){
+    bits.push('Galileo');
+    if(s.svid) bits.push(s.svid);
+    if(s.gsat) bits.push(s.gsat);
+    if(s.status&&s.status!=='USABLE') bits.push(s.status.toLowerCase());
+  }else if(s.fam.key==='beidou'){
+    bits.push(s.series?s.series.replace('BEIDOU','BeiDou'):'BeiDou');
+    if(s.orbit) bits.push(s.orbit);
+    if(s.code) bits.push('PRN '+s.code);
+  }
+  bits.push('el '+s.pel[idx].toFixed(0)+'° az '+s.paz[idx].toFixed(0)+'°');
   hoverEl.textContent=bits.join(' · ');
 }
 
@@ -501,42 +659,83 @@ function updateLocation(){
   subtitleEl.textContent='Timelapse simulation — lying on your back at '+site.label;
 }
 
-function drawLegend(){
-  const seen=PLANES.filter(p=>sats.some(s=>s.plane.charAt(0)===p));
-  legendEl.innerHTML=seen.map(p=>{
-    const n=sats.filter(s=>s.plane.charAt(0)===p).length;
-    return '<span><i class="swatch" style="background:'+PLANE_COLORS[p]+'"></i>Plane '+p+' ('+n+')</span>';
+function enabledFamilies(){return CONSTELLATIONS.filter(f=>f.on&&allSats.some(s=>s.fam===f));}
+
+// One constellation on its own is coloured by orbital plane where we know it;
+// with several up, colour has to separate the constellations instead.
+function assignColors(){
+  const byPlane=enabledFamilies().length<2;
+  for(const s of sats) s.color=(byPlane&&s.plane)?(PLANE_COLORS[s.plane.charAt(0)]||s.fam.color):s.fam.color;
+  return byPlane;
+}
+
+function drawToggles(){
+  togglesEl.innerHTML=CONSTELLATIONS.map(f=>{
+    const n=allSats.filter(s=>s.fam===f).length;
+    return '<button class="chip" type="button" data-key="'+f.key+'" aria-pressed="'+(f.on?'true':'false')+'"'
+      +(f.on?' style="color:'+f.color+'"':'')+(n?'':' disabled')+'>'
+      +'<i class="swatch" style="background:'+f.color+'"></i>'+f.name
+      +(n?' <span class="count">'+n+'</span>':'')+'</button>';
   }).join('');
+}
+
+function drawLegend(byPlane){
+  const seen=byPlane?PLANES.filter(p=>sats.some(s=>s.plane.charAt(0)===p)):[];
+  legendEl.innerHTML=seen.map(p=>'<span><i class="swatch" style="background:'+PLANE_COLORS[p]
+    +'"></i>Plane '+p+' ('+sats.filter(s=>s.plane.charAt(0)===p).length+')</span>').join('');
+}
+
+// Anything that never clears the horizon over the whole run is worth saying out
+// loud, rather than leaving someone staring at an empty sky.
+function visibilityNote(){
+  const never=enabledFamilies().filter(f=>{
+    const mine=sats.filter(s=>s.fam===f);
+    return mine.length&&mine.every(s=>s.maxEl<0);
+  });
+  if(!never.length) return '';
+  return ' ' + never.map(f=>f.name).join(' and ')
+    + (never.length>1?' never rise':' never rises')
+    + ' at this latitude and longitude — nothing to plot for '
+    + (never.length>1?'them':'it') + ' here.';
+}
+
+function refresh(){
+  sats=allSats.filter(s=>s.fam.on);
+  hovered=null;
+  const byPlane=assignColors();
+  computeAll();
+  if(idx>=N) idx=N-1;
+  drawToggles();
+  drawLegend(byPlane);
+  dataEl.textContent=sourceNote+visibilityNote();
+  render();
 }
 
 function resetToNow(){
   startMs=Date.now();
-  computeAll();
   idx=0;
-  render();
-}
-
-function useSats(list,note){
-  sats=list;
-  hovered=null;
-  dataEl.textContent=note;
-  drawLegend();
-  resetToNow();
+  refresh();
 }
 
 function loadElements(){
-  fetch(TLE_URL,{cache:'no-store'})
+  fetch(GNSS_URL,{cache:'no-store'})
     .then(r=>{if(!r.ok) throw new Error('HTTP '+r.status); return r.json();})
     .then(gp=>{
       const list=satsFromGP(gp);
       if(!list.length) throw new Error('no usable element sets');
+      allSats=list;
       const newest=Math.max.apply(null,list.map(s=>s.epochMs));
       const ageH=(Date.now()-newest)/3600000;
-      useSats(list,'Live orbital elements — '+list.length+' operational GPS satellites from CelesTrak, newest epoch '
-        +stampFmt.format(new Date(newest))+' ('+(ageH<1?'<1':ageH.toFixed(0))+'h old). SVN, PRN, plane and block from NAVCEN.');
+      sourceNote='Live orbital elements — '+list.length+' GNSS satellites from CelesTrak, newest epoch '
+        +stampFmt.format(new Date(newest))+' ('+(ageH<1?'<1':ageH.toFixed(0))+'h old). '
+        +'GPS SVNs from NAVCEN, Galileo SV IDs from the GSC.';
+      refresh();
     })
     .catch(err=>{
-      useSats(syntheticSats(),'Could not fetch live elements ('+err.message+') — showing an illustrative 24-satellite model, so these are not real satellites.');
+      allSats=syntheticSats();
+      for(const f of CONSTELLATIONS) f.on=(f.key==='gps');
+      sourceNote='Could not fetch live elements ('+err.message+') — showing an illustrative 24-satellite model, so these are not real satellites.';
+      refresh();
     });
 }
 
@@ -569,15 +768,37 @@ if(navigator.permissions&&navigator.permissions.query){
   }).catch(()=>{});
 }
 
+togglesEl.addEventListener('click',ev=>{
+  const btn=ev.target.closest('.chip');
+  if(!btn) return;
+  const fam=CONSTELLATIONS.find(f=>f.key===btn.dataset.key);
+  if(!fam) return;
+  fam.on=!fam.on;
+  refresh();
+});
+
+function drawSpans(){
+  spanEl.innerHTML=SPANS.map((s,i)=>'<button class="chip" type="button" data-span="'+i+'" aria-pressed="'
+    +(i===spanIdx?'true':'false')+'">'+s.label+'</button>').join('');
+}
+
+spanEl.addEventListener('click',ev=>{
+  const btn=ev.target.closest('.chip');
+  if(!btn) return;
+  spanIdx=parseInt(btn.dataset.span,10);
+  slider.max=Math.round(SPANS[spanIdx].hours*3600/STEP_S)-1;
+  drawSpans();
+  refresh();   // idx is kept, so the same moment stays on screen
+});
+
 function pointerMove(ev){
   const rect=canvas.getBoundingClientRect();
   const scale=W/rect.width;
   const mx=(ev.clientX-rect.left)*scale, my=(ev.clientY-rect.top)*scale;
   let best=null, bestD=14*14;
   for(const s of sats){
-    const p=s.pts[idx];
-    if(!p.visible) continue;
-    const d=(p.x-mx)*(p.x-mx)+(p.y-my)*(p.y-my);
+    if(s.pel[idx]<=0) continue;
+    const d=(s.px[idx]-mx)*(s.px[idx]-mx)+(s.py[idx]-my)*(s.py[idx]-my);
     if(d<bestD){bestD=d; best=s;}
   }
   if(best!==hovered){hovered=best; render();}
@@ -586,10 +807,6 @@ function pointerMove(ev){
 canvas.addEventListener('mousemove',pointerMove);
 canvas.addEventListener('mouseleave',()=>{if(hovered){hovered=null; render();}});
 canvas.addEventListener('pointerdown',pointerMove);
-
-updateLocation();
-useSats(syntheticSats(),'Loading live orbital elements…');
-loadElements();
 
 slider.addEventListener('input',()=>{idx=parseInt(slider.value,10); render();});
 speedSlider.addEventListener('input',()=>{speedOut.textContent='x'+speedSlider.value;});
@@ -628,6 +845,13 @@ resetBtn.addEventListener('click',()=>{
   setPlayIcon(false);
   resetToNow();
 });
+
+updateLocation();
+drawSpans();
+allSats=syntheticSats();
+sourceNote='Loading live orbital elements…';
+refresh();
+loadElements();
 })();
 </script>
 </body>
