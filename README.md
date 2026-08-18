@@ -27,9 +27,15 @@ The GPS table is keyed by NORAD catalogue number, which never changes for a give
 
 ### Keeping it current
 
-The orbital elements need no maintenance -- the page fetches them live on every load, so new launches and retirements track reality on their own. Only the two identity tables above go stale, and they are refreshed monthly by `.github/workflows/refresh-gnss-metadata.yml`, which runs the tool and commits only when something actually changed. Run it by hand from the Actions tab at any time; change the `cron` line to `'17 4 * * 1'` for weekly, which is worth doing if you care about Galileo service status, the fastest-moving field of the lot.
+The orbital elements need no maintenance -- the page fetches them live on every load, so new launches and retirements track reality on their own. Only the two identity tables above go stale, and they are refreshed every Monday by `.github/workflows/refresh-gnss-metadata.yml`, which runs the tool and commits only when something actually changed. Run it by hand from the Actions tab at any time.
 
-Note that GitHub disables scheduled workflows in a repository with no activity for 60 days; a manual run re-arms it.
+One caveat: GitHub disables scheduled workflows in a **public** repository after 60 days with no repository activity. Workflow runs do not count as activity, and this one commits only when a constellation actually changes -- a few times a year, by the Actions bot -- so it will not reliably keep itself alive. It fails visibly rather than silently: GitHub emails the repository admins when it disables a workflow. Re-enable it from the Actions tab, or with
+
+```
+gh api -X PUT repos/beezly/gps-sky-trails/actions/workflows/refresh-gnss-metadata.yml/enable
+```
+
+Any push to the repository resets the 60-day clock. If you want the schedule to be genuinely self-sustaining, push using a personal access token stored as a secret instead of the default `GITHUB_TOKEN`, so the commits are attributed to you and count as repository activity.
 
 If a table does fall behind, the failure is cosmetic rather than broken: a satellite missing from it still plots and animates correctly, because its position comes from the live elements. It simply loses its label, and in a single-constellation view its plane colour.
 

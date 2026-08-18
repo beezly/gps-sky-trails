@@ -4,13 +4,20 @@
 # from sources that send no CORS headers and so cannot be read from the page.
 #
 # Commits only when something actually changed; the commit publishes itself,
-# since Pages deploys from main. Note that GitHub disables scheduled workflows
-# in a repository with no activity for 60 days -- a manual run re-arms it.
+# since Pages deploys from main.
+#
+# Caveat worth knowing: GitHub disables scheduled workflows in a PUBLIC
+# repository after 60 days with no repository activity. Runs of this workflow
+# are not activity, and its own commits are both rare and made by the Actions
+# bot, so do not count on them keeping the schedule alive. GitHub emails the
+# repository admins when it disables a workflow; re-enable it from the Actions
+# tab, or with:
+#   gh api -X PUT repos/beezly/gps-sky-trails/actions/workflows/refresh-gnss-metadata.yml/enable
 name: Refresh GNSS metadata
 
 on:
   schedule:
-    - cron: '17 4 1 * *'   # 04:17 UTC on the 1st of each month
+    - cron: '17 4 * * 1'   # 04:17 UTC every Monday
   workflow_dispatch:
 
 permissions:
